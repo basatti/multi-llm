@@ -1,0 +1,26 @@
+name: terraform
+
+on:
+  pull_request:
+    paths: ["terraform/**"]
+  push:
+    branches: [main]
+    paths: ["terraform/**"]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+      - name: fmt
+        run: terraform fmt -check -recursive terraform
+      - name: validate all envs
+        run: |
+          for env in dev staging prod; do
+            echo "== terraform/envs/$env"
+            terraform -chdir="terraform/envs/$env" init -backend=false -input=false
+            terraform -chdir="terraform/envs/$env" validate
+          done

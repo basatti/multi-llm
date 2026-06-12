@@ -1,0 +1,25 @@
+name: python
+
+on:
+  pull_request:
+    paths: ["orchestration/**", "mock-openai/**", "scripts/**"]
+  push:
+    branches: [main]
+    paths: ["orchestration/**", "mock-openai/**", "scripts/**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install
+        run: pip install "./orchestration[dev]"
+      - name: lint
+        run: |
+          cd orchestration && ruff check src tests
+          cd .. && ruff check mock-openai scripts
+      - name: test
+        run: cd orchestration && pytest

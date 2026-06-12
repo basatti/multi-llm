@@ -1,0 +1,23 @@
+# Enforces the atomic-PR rule: a gateway route referencing a model that is not
+# in models/manifest.yaml cannot merge (models/README.md).
+name: config-validation
+
+on:
+  pull_request:
+    paths: ["gateway/**", "models/**", "scripts/**"]
+  push:
+    branches: [main]
+    paths: ["gateway/**", "models/**", "scripts/**"]
+
+jobs:
+  validate-routes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install
+        run: pip install pyyaml jsonschema
+      - name: manifest <-> route consistency
+        run: python scripts/validate_routes.py
