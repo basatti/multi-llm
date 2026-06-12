@@ -121,9 +121,16 @@ resource "aws_security_group" "instance" {
   description = "GPU instance: gateway ingress from ALB only"
   vpc_id      = aws_vpc.this.id
   ingress {
-    description     = "Gateway from ALB"
+    description     = "Gateway (LiteLLM) from ALB"
     from_port       = 4000
     to_port         = 4000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+  ingress {
+    description     = "Langfuse UI from ALB"
+    from_port       = 3000
+    to_port         = 3000
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
@@ -301,7 +308,14 @@ resource "aws_instance" "this" {
     vllm_model          = var.vllm_model
   })
 
-  user_data_replace_on_change = true
+  # First-boot user-data only runs once. Don't trigger instance replacement on
+  # template edits — they're documentation of the current bootstrap; a real
+  # reboot won't re-run them anyway.
+  user_data_replace_on_change = false
+
+  lifecycle {
+    ignore_changes = [user_data, ami]
+  }
 
   tags = { Name = "llm-platform" }
 }
@@ -350,9 +364,94 @@ resource "aws_lb_listener" "https" {
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
   certificate_arn   = data.aws_acm_certificate.kleem.arn
 
+  # Default → main gateway (covers llm.kleem.io and unknown hosts)
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.gateway.arn
+  }
+}
+
+# Langfuse target group — instance port 3000
+resource "aws_lb_target_group" "langfuse" {
+  name        = "llm-langfuse"
+  port        = 3000
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.this.id
+  target_type = "instance"
+
+  health_check {
+    path                = "/api/public/ready"
+    matcher             = "200"
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 5
+  }
+
+  deregistration_delay = 30
+}
+
+resource "aws_lb_target_group_attachment" "langfuse" {
+  target_group_arn = aws_lb_target_group.langfuse.arn
+  target_id        = aws_instance.this.id
+  port             = 3000
+}
+
+# Host-based rules: langfuse.kleem.io → :3000, litellm.kleem.io → :4000.
+# Each app's own auth (Langfuse user/password; LiteLLM master-key Bearer) gates
+# every protected endpoint — TLS termination + cert handled by the ALB.
+
+resource "aws_lb_listener_rule" "langfuse" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 100
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.langfuse.arn
+  }
+
+  condition {
+    host_header {
+      values = ["langfuse.kleem.io"]
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "litellm_admin" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 110
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.gateway.arn
+  }
+
+  condition {
+    host_header {
+      values = ["litellm.kleem.io"]
+    }
+  }
+}
+
+resource "aws_route53_record" "langfuse" {
+  zone_id = data.aws_route53_zone.kleem.zone_id
+  name    = "langfuse.kleem.io"
+  type    = "A"
+  alias {
+    name                   = aws_lb.this.dns_name
+    zone_id                = aws_lb.this.zone_id
+    evaluate_target_health = true
+  }
+}
+
+resource "aws_route53_record" "litellm" {
+  zone_id = data.aws_route53_zone.kleem.zone_id
+  name    = "litellm.kleem.io"
+  type    = "A"
+  alias {
+    name                   = aws_lb.this.dns_name
+    zone_id                = aws_lb.this.zone_id
+    evaluate_target_health = true
   }
 }
 
