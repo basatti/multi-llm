@@ -1,0 +1,27 @@
+# Model manifest — the single source of truth for what the inference layer serves.
+# Every gateway route with `model_info.source: local` must reference an id (model
+# or adapter) from this file via `model_info.manifest_id`. CI enforces this
+# (scripts/validate_routes.py): a route to a non-manifested model cannot merge.
+#
+# NOTE: `base-bilingual-14b-awq` is a placeholder identity. The actual base model
+# is selected by the Phase 0 Arabic/English benchmark (architecture.md §11/§12);
+# the id, family, and weights_uri change in the same PR that adds its route.
+
+models:
+  - id: base-bilingual-14b-awq
+    family: qwen2.5 # placeholder pending Phase 0 benchmark
+    weights_uri: s3://onetechhub-llm-weights/base-bilingual-14b-awq/
+    revision: "0000000000000000000000000000000000000000" # set on weight upload
+    quantization: awq
+    serving:
+      engine: vllm
+      instance_class: g5.xlarge
+      max_model_len: 16384
+      replicas:
+        min: 1 # warm minimum: one replica per actively routed model (§4.3)
+        max: 4
+        scale_to_zero: false
+    adapters:
+      - id: kleem-summarize-lora-v1
+        uri: s3://onetechhub-llm-weights/adapters/kleem-summarize-lora-v1/
+        revision: "0000000000000000000000000000000000000000"
