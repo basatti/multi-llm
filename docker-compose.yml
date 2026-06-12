@@ -70,7 +70,8 @@ services:
     volumes:
       - minio-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      # mc is in the image; curl is not.
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -154,9 +155,9 @@ services:
         condition: service_started
 
   mock-openai:
+    # No host port: only litellm needs to reach it, via the compose network as
+    # mock-openai:8080. Avoids collisions with anything else on host :8080.
     build: ./mock-openai
-    ports:
-      - "8080:8080"
     environment:
       MOCK_FAIL_MODELS: ${MOCK_FAIL_MODELS:-}
 

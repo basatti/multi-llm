@@ -12,8 +12,12 @@
 #   3. On every upgrade: review the dependency diff (release notes + lockfile
 #      diff) before bumping the tag, then re-pin the new digest.
 #
-# TODO(pin-digest): append @sha256:<digest> after the first verified pull.
-FROM ghcr.io/berriai/litellm:v1.83.0-stable
+# Pinned by digest below — the human-readable tag (BerriAI publishes `main-stable`
+# from the LiteLLM repo's stable channel) is recorded for readability, but the
+# digest is the actual immutable pin. Re-resolve the digest on every upgrade with:
+#   docker manifest inspect ghcr.io/berriai/litellm:main-stable | grep digest
+# then commit the new value.
+FROM ghcr.io/berriai/litellm:main-stable@sha256:60372ab3075280b4b58c16b0f9c711eb1ff23a746df2add9b85ec2a559e9a1ef
 
 COPY config/ /etc/litellm/
 

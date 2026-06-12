@@ -1,4 +1,5 @@
 import time
+from urllib.parse import quote
 
 import httpx
 
@@ -39,8 +40,10 @@ class LangfuseClient:
         cached = self._cache.get((name, label))
         if cached and time.monotonic() - cached[0] < self._cache_ttl:
             return cached[1]
+        # Prompt names contain '/' (namespace/template); encode so it stays one segment.
         resp = await self._http.get(
-            f"/api/public/v2/prompts/{name}", params={"label": label}
+            f"/api/public/v2/prompts/{quote(name, safe='')}",
+            params={"label": label},
         )
         resp.raise_for_status()
         prompt = resp.json()["prompt"]
