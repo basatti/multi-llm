@@ -1,6 +1,6 @@
 # 1TechHub LLM Platform — Architecture & Implementation Plan
 
-**Status:** Draft for review
+**Status:** Adopted — v1.1, review feedback folded in
 **Owner:** AI & Innovation — Basil A. Satti
 **Date:** June 2026
 **Scope:** Shared LLM serving platform for Kleem, PMS, and Qams on AWS GPU infrastructure
@@ -42,7 +42,7 @@ Migration is incremental: existing frontier API usage is re-pointed at the gatew
 
 ## 3. Architecture overview
 
-Four layers, strictly ordered. Calls only flow downward; no layer reaches around another.
+Four layers, strictly ordered. Calls only flow downward. **Orchestration is mandatory for all stateful or agentic calls** (sessions, memory, RAG, tool loops). Products may call the gateway directly **only for stateless one-shot completions** — that is the single sanctioned shortcut, and no layer ever reaches the inference layer except the gateway.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -51,7 +51,7 @@ Four layers, strictly ordered. Calls only flow downward; no layer reaches around
 └───────────────┬─────────────────────────┬───────────────┘
                 │  agentic / stateful     │  one-shot
                 ▼                         │  completions
-┌───────────────────────────────┐         │
+┌───────────────────────────────┐         │  (stateless only)
 │  3. ORCHESTRATION (stateful)  │         │
 │     Sessions · memory · RAG   │         │
 │     Tool calling · agent loops│         │
@@ -97,7 +97,7 @@ The dominant cost lever. Instead of one GPU deployment per product-specific mode
 - Run a small number of **base models** (e.g., one strong multilingual 8–14B for general chat/summarization, one larger model if a use case demands it).
 - Product-specific fine-tunes are served as **hot-swappable LoRA adapters** on the shared base via vLLM's multi-LoRA serving. Dozens of logical "models" per GPU instead of one.
 - Apply **quantization** (FP8 on Hopper/Ada-class GPUs, AWQ otherwise) to increase concurrency per card or fit larger bases.
-- Arabic/English bilingual capability is a hard requirement for model selection given our market; candidate bases must be benchmarked on Arabic tasks before adoption.
+- Arabic/English bilingual capability is a hard requirement for model selection given our market; candidate bases must be benchmarked on Arabic tasks before adoption. **The benchmark shortlist is a Phase 0 deliverable** (§11) — small open-weight models are historically weakest exactly where we need them, so this cannot trail the infrastructure work.
 
 ### 4.3 AWS instance strategy
 
@@ -106,19 +106,21 @@ The dominant cost lever. Instead of one GPU deployment per product-specific mode
 | Kleem realtime (voice turns) | Small/fast 7–14B, quantized | `g6e` (L40S) or `g5` (A10G) | Pinned warm replicas, never scale-to-zero |
 | General product features (PMS, Qams chat/summarize) | 7–34B | `g5` / `g6e` | Warm baseline of 1 replica per active model |
 | Heavy RAG / long-context (Qams inspection) | 34–70B+ | `p4d` (A100) / `p5` (H100) only if justified | Validate demand on frontier fallback first |
-| Batch/async (summaries, analytics, embeddings) | Smallest viable | Spare capacity on the above; Spot where tolerable | Queue-based, latency-insensitive |
+| Batch/async (summaries, analytics) | Smallest viable | Spare capacity on the above; Spot where tolerable | Queue-based, latency-insensitive |
+
+**Embeddings are a separate serving problem.** They have a different profile (high-throughput, CPU-viable, latency-tolerant) and are deliberately *not* covered by the GPU strategy above. Open question (§12): gateway-routed managed embeddings (Bedrock/OpenAI) vs. self-hosted in the LLM repo. Either way they route through the gateway like everything else. Resolve by Phase 1, when Qams RAG work makes it concrete.
 
 **Autoscaling rules:**
 - Scale on **queue depth and TTFT**, not CPU/GPU utilization alone.
 - Maintain a **warm minimum of one replica per actively routed model**. Cold starts cost tens of seconds to minutes (weight loading); they are absorbed by the gateway's frontier fallback, never by the user.
 - Scale-to-zero is permitted only for low-traffic models on async paths.
 
-**Bedrock checkpoint:** Before committing to large-GPU spend (`p4d`/`p5`), re-evaluate AWS Bedrock's open-weight catalog. Self-hosting earns its keep with custom LoRAs, data-residency constraints, or sustained high volume; if a use case has none of those, Bedrock (routed through the same gateway) may be the cheaper operational answer.
+**Economics checkpoint (applies to ALL GPU spend, not just large instances):** A warm g5/g6e replica costs on the order of $700–1,400/month before serving a single useful token. For modest traffic, frontier APIs with prompt caching are often cheaper than even one warm GPU. Therefore: **every warm-capacity commitment — including the first g5/g6e baseline — requires a break-even calculation from Phase 0 gateway telemetry** (token volume × frontier unit cost vs. warm-replica monthly cost). Before committing to large-GPU spend (`p4d`/`p5`), additionally re-evaluate AWS Bedrock's open-weight catalog. Self-hosting earns its keep with custom LoRAs, data-residency constraints, or sustained high volume; if a use case has none of those, Bedrock (routed through the same gateway) may be the cheaper operational answer.
 
 ### 4.4 Repository and deployment model
 
-- A single `llm-repo` (infrastructure-as-code + model manifests): Terraform for AWS resources, container definitions for vLLM, a manifest mapping model IDs → weights (S3) → LoRA adapters → instance class → replica policy.
-- CI deploys model changes without touching gateway or orchestration. Adding a model or adapter is a manifest change + gateway route update, zero product code changes.
+- **This repository (`llm-repo`) is the platform monorepo:** Terraform for AWS resources, container definitions for vLLM and the gateway, the model manifest (`models/manifest.yaml`) mapping model IDs → weights (S3) → LoRA adapters → instance class → replica policy, **and the gateway routing config** (`gateway/config/`). Co-locating manifest and routes makes a model change + route update a single atomic PR, enforced by CI (`scripts/validate_routes.py`). The orchestration service skeleton also lives here initially and can be extracted once it specializes per product.
+- CI deploys model changes without touching orchestration or products. Adding a model or adapter is a manifest change + gateway route update in one PR, zero product code changes.
 - Model weights stored in S3 in-region; nodes pull on boot (or from a warm EBS/FSx cache to cut cold-start time).
 
 ---
@@ -128,10 +130,10 @@ The dominant cost lever. Instead of one GPU deployment per product-specific mode
 ### 5.1 Responsibilities
 
 1. **Logical model routing.** Products request logical names (`kleem-realtime`, `chat-default`, `qams-rag`, `summarize-cheap`); the gateway maps these to physical backends. Re-pointing a logical name is a config change, invisible to products.
-2. **Auth via virtual keys.** Each product/service receives a gateway-issued virtual key. Real provider credentials (Anthropic, OpenAI, Bedrock IAM) live only in the gateway's secret store. Keys are scoped, budgeted, and revocable per product and per tenant where needed.
+2. **Auth via virtual keys.** Each product/service receives a gateway-issued virtual key. Real provider credentials (Anthropic, OpenAI, Bedrock IAM) live only in the gateway's secret store. Keys are scoped, budgeted, and revocable per product. **Tenant attribution is mandatory, not optional:** tenant-scoped products send `metadata.tenant_id` on every request; it is part of the gateway logging schema from day one, and requests missing the tag on tenant-scoped routes are flagged (later: rejected). Per-tenant *keys* remain available where stronger isolation is warranted.
 3. **Rate limits and budgets.** Request/token/spend caps per virtual key. A runaway agent loop in one product cannot exhaust GPU capacity or frontier spend for the others.
-4. **Fallback chains, retries, load balancing.** Per logical name: ordered backend list with timeout and error policies. Example: `kleem-realtime` → local vLLM (TTFT timeout 400 ms) → fast frontier model.
-5. **Model lifecycle: enable/disable.** Enabling or disabling a model is a gateway routing change, not a deployment event. Soft disable: remove the physical backend from the logical name's route — new requests immediately resolve to the next backend in the fallback chain, in-flight streams complete, products see nothing (they only know logical names). Hard disable: after draining, scale the vLLM deployment to zero via the `llm-repo` manifest to release GPU spend. Per-app revocation is handled by key scoping. Two enforced rules: every logical name must have a fallback chain (a disabled model with no fallback is an outage), and disable ≠ delete — manifests and weights are retained so re-enable is a config flip plus warm-up.
+4. **Fallback chains, retries, load balancing.** Per logical name: ordered backend list with timeout and error policies. Example: `kleem-realtime` → local vLLM (TTFT timeout 400 ms) → fast frontier model. **For latency-critical routes, hedged requests are the evaluated alternative** (§7.1): race local against a fast frontier model and cancel the loser at first token, trading a few duplicate tokens for the elimination of additive failover latency.
+5. **Model lifecycle: enable/disable.** Enabling or disabling a model is a gateway routing change, not a deployment event. Soft disable: remove the physical backend from the logical name's route — new requests immediately resolve to the next backend in the fallback chain, in-flight streams complete, products see nothing (they only know logical names). Hard disable: after draining, scale the vLLM deployment to zero via the `llm-repo` manifest to release GPU spend. Per-app revocation is handled by key scoping. Two enforced rules: every logical name backed by a local model must have a fallback chain (a disabled model with no fallback is an outage — CI-enforced by `scripts/validate_routes.py`), and disable ≠ delete — manifests and weights are retained so re-enable is a config flip plus warm-up.
 6. **Observability and cost attribution.** Every request logged with virtual key, logical model, resolved backend, token counts, TTFT, total latency, and computed cost. This is the platform's single source of truth for "local vs. frontier" economics.
 7. **Optional, later:** exact-match/semantic response caching; centralized input/output guardrails.
 
@@ -167,7 +169,7 @@ The gateway is **stateless and conversation-blind**. It knows keys, budgets, rou
 
 ### 6.2 Structure
 
-- **Start as one shared orchestration service** (with clean per-product modules) to avoid triple-building session plumbing.
+- **Start as one shared orchestration service** (with clean per-product modules) to avoid triple-building session plumbing. **Stack: Python/FastAPI** (decided — aligns with Qams's AI service and the Python LLM ecosystem; Kleem's TypeScript worker consumes it over HTTP/SSE).
 - **Expect and plan for per-product specialization.** Kleem's voice-turn loop (barge-in, sub-second budgets, TTS coupling) and Qams's inspection pipeline (long documents, provenance, locked rubrics) will diverge. The shared core should be session storage, memory primitives, and the gateway client; the loops on top are product-owned.
 - All model calls from orchestration go **through the gateway** using orchestration's (or the originating product's) virtual key — orchestration never holds provider credentials and never addresses vLLM directly.
 
@@ -214,6 +216,7 @@ Application onboarding spans three systems, and the responsibilities must not bl
 - Kleem's TypeScript worker holds a streaming connection to orchestration per active call, keyed by `session_id`. The worker keeps no conversation state locally — orchestration owns it — so workers scale horizontally and dropped connections recover cleanly.
 - Orchestration manages the turn: history, memory, tool calls, prompt assembly, then streams the completion from the gateway.
 - **Hard TTFT budget (target ≤ 400 ms to first token at the gateway).** Routed to a pinned, warm, quantized small model. On TTFT timeout, the gateway fails over to a fast frontier model — a slightly costlier fast answer always beats a cheap slow one in voice.
+- **Failover strategy is an open measurement question.** Sequential failover makes the user pay the 400 ms timeout *plus* frontier TTFT on every miss. The alternative is **hedged requests**: fire local and fast-frontier together, stream from whichever produces a token first, cancel the other. Costs a few duplicate tokens per turn; removes additive tail latency entirely. Decide from Phase 2 shadow-traffic TTFT data, not preemptively.
 - **Streaming is end-to-end:** GPU → gateway → orchestration → TS worker → TTS, with TTS fed at sentence/clause boundaries so audio begins while generation continues.
 - **Cancellation propagates.** On barge-in, the worker closes the stream; orchestration and gateway propagate the abort so vLLM frees the sequence immediately. Interrupted turns must not keep burning GPU.
 
@@ -233,7 +236,7 @@ Application onboarding spans three systems, and the responsibilities must not bl
 
 ### 7.4 General microservices
 
-Any microservice needing AI gets a virtual key and calls the gateway with a logical model name. No service ever receives provider API keys again.
+Any microservice needing AI gets a virtual key and calls the gateway with a logical model name — **stateless one-shot completions only**; anything needing sessions, memory, or tools goes through orchestration (§3). No service ever receives provider API keys again.
 
 ---
 
@@ -244,7 +247,7 @@ Any microservice needing AI gets a virtual key and calls the gateway with a logi
   - *Platform subnet* — gateway replicas + orchestration service + Redis/ElastiCache, behind internal load balancers.
   - *GPU subnet* — vLLM nodes, isolated; ingress only from the gateway security group; egress only to S3 (weights) and telemetry.
 - **No public ingress to gateway or GPU nodes.** Products reach the gateway over internal DNS (e.g., `llm-gateway.internal.1techhub`).
-- **Compute:** GPU nodes on EKS with the NVIDIA device plugin (preferred, aligns with manifest-driven deploys and autoscaling via Karpenter), or ECS/ASG if the team prefers lower Kubernetes overhead initially.
+- **Compute:** GPU nodes on EKS with the NVIDIA device plugin (preferred, aligns with manifest-driven deploys and autoscaling via Karpenter), or ECS/ASG if the team prefers lower Kubernetes overhead initially. Tracked as ADR 0001; the gateway itself runs on ECS Fargate either way.
 - **Secrets:** AWS Secrets Manager for provider credentials and the gateway's master key; IAM roles for service-to-service auth where applicable.
 - **Environments:** `dev` (CPU or single small GPU + frontier-heavy routing), `staging`, `prod`. Routing tables are per-environment config.
 
@@ -254,7 +257,7 @@ Any microservice needing AI gets a virtual key and calls the gateway with a logi
 
 All telemetry hangs off the gateway because every request crosses it.
 
-**Per-request fields:** virtual key (product/tenant), logical model, resolved backend, prompt/completion tokens, TTFT, total latency, status, fallback-triggered flag, computed cost.
+**Per-request fields:** virtual key (product/service), `tenant_id` (mandatory request metadata on tenant-scoped routes), logical model, resolved backend, prompt/completion tokens, TTFT, total latency, status, fallback-triggered flag, computed cost.
 
 **Dashboards (minimum):**
 1. Cost per product per day, split local vs. frontier — the migration scoreboard.
@@ -282,12 +285,14 @@ All telemetry hangs off the gateway because every request crosses it.
 
 **Phase 0 — Gateway in front of what exists (1–2 weeks)**
 Deploy hardened LiteLLM proxy (2 replicas + Redis). Issue virtual keys to Kleem, PMS, Qams, and microservices. Re-point all existing frontier API calls at the gateway with logical names. *No model changes.* Outcome: unified telemetry, budgets, and the cost baseline.
+**Parallel Phase 0 deliverable: the Arabic/English base-model benchmark.** Shortlist candidates, name an evaluation owner, run the bilingual eval. This gates Phase 1 — infrastructure must not be ready before we know what to put on it.
 
 **Phase 1 — First local model on the async tier (2–4 weeks)**
-Stand up the `llm-repo`: one vLLM deployment, one quantized 8–14B bilingual base, on `g5`/`g6e`. Route low-risk async workloads (Kleem post-call summaries, PMS summarization) to it with frontier fallback. Deploy self-hosted Langfuse and stand up the minimal app registry (§6.4): app profiles, owner/cost-center metadata, first versioned prompt templates in Langfuse. Validate quality via sampled evals; validate cost via dashboard 1.
+**Entry gate (go/no-go):** break-even calculation from Phase 0 telemetry — measured token volume × frontier unit cost (including prompt caching) vs. warm g5/g6e replica monthly cost. If the math doesn't clear, Phase 1 waits or the workload goes to Bedrock through the same gateway; no GPU spend on faith.
+Stand up the inference layer: one vLLM deployment, the benchmark-selected quantized 8–14B bilingual base, on `g5`/`g6e`. Route low-risk async workloads (Kleem post-call summaries, PMS summarization) to it with frontier fallback. Deploy self-hosted Langfuse and stand up the minimal app registry (§6.4): app profiles, owner/cost-center metadata, first versioned prompt templates in Langfuse. Validate quality via sampled evals; validate cost via dashboard 1.
 
 **Phase 2 — Kleem realtime path (3–5 weeks, overlaps Phase 1)**
-Stand up orchestration's session service for Kleem voice turns (server-side state, streaming, cancellation). Pin warm replicas for `kleem-realtime`, enforce the 400 ms TTFT budget with frontier failover. Shift live traffic gradually (shadow → percentage rollout), watching TTFT p95/p99 and fallback rate.
+Stand up orchestration's session service for Kleem voice turns (server-side state, streaming, cancellation). Pin warm replicas for `kleem-realtime`, enforce the 400 ms TTFT budget with frontier failover. Shift live traffic gradually (shadow → percentage rollout), watching TTFT p95/p99 and fallback rate. Use shadow-traffic data to decide sequential failover vs. hedged requests (§7.1).
 
 **Phase 3 — Qams and RAG workloads**
 Refactor the AI Inspector to call the gateway. Benchmark local candidates against the frontier baseline on accuracy (rubric adherence, provenance fidelity) before shifting any traffic. Accuracy gates the migration; cost does not.
@@ -301,20 +306,24 @@ Introduce multi-LoRA serving for the first product fine-tune. Split orchestratio
 
 ## 12. Key decisions and open questions
 
-**Decided (this document):**
+**Decided:**
 - Inference layer is stateless and fully isolated from orchestration. (Core decision.)
 - OpenAI wire protocol everywhere; vLLM as serving engine; LoRA-on-shared-base over per-model deployments.
-- LiteLLM proxy (pinned, hardened) as initial gateway; single front door for all products.
-- Langfuse (self-hosted) for prompt/template management and tracing; the custom app registry is reduced to agent config + governance glue (§6.4).
+- LiteLLM proxy (pinned, hardened) as initial gateway; single front door for all products. Gateway runs on ECS Fargate. **Config-only engagement: no forking, no custom gateway code in Phases 0–2.**
+- **Langfuse (self-hosted) for prompt/template management and tracing;** the custom app registry is reduced to agent config + governance glue (§6.4).
 - Sessions/memory live in orchestration, keyed by product + tenant + session; never in gateway or inference.
-- Incremental migration with frontier fallback as a permanent capability.
+- **Orchestration stack: Python/FastAPI**, one shared service initially, product-owned loops on top.
+- **`llm-repo` is the platform monorepo:** inference IaC + model manifest + gateway config (+ orchestration skeleton initially); manifest/route changes are atomic PRs enforced by CI.
+- **Tenant attribution via mandatory `metadata.tenant_id`** request tag on tenant-scoped routes, in the logging schema from day one.
+- Incremental migration with frontier fallback as a permanent capability; **every warm-GPU commitment passes a telemetry-based break-even gate first.**
 
 **Open — to be resolved during Phases 0–1:**
-1. Base model selection (Arabic/English benchmark shortlist and evaluation owner).
-2. EKS vs. ECS for GPU nodes (team operational preference).
-3. Orchestration service stack (TypeScript to align with Kleem's worker vs. Python to align with Qams's AI service — or both, sharing only the gateway contract).
+1. Base model selection — Arabic/English benchmark shortlist and evaluation owner. **Phase 0 deliverable; gates Phase 1 start.**
+2. EKS vs. ECS for GPU nodes (team operational preference) — ADR 0001; decide before Phase 1 implementation of the inference module.
+3. **Embeddings serving:** gateway-routed managed embeddings (Bedrock/OpenAI) vs. self-hosted in the LLM repo. Different serving profile from chat models (CPU-viable, throughput-oriented). Routed through the gateway either way; resolve by Phase 1 alongside Qams RAG work.
 4. Whether Qams's quality tier ends up local-large, frontier-permanent, or hybrid — answered by Phase 3 benchmarks.
-5. Guardrails/caching at the gateway: adopt when a concrete need appears, not speculatively.
+5. Kleem realtime failover: sequential TTFT-timeout vs. hedged requests — answered by Phase 2 shadow-traffic data.
+6. Guardrails/caching at the gateway: adopt when a concrete need appears, not speculatively.
 
 ---
 
@@ -323,11 +332,12 @@ Introduce multi-LoRA serving for the first product fine-tune. Split orchestratio
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Local model quality below frontier for a feature | User-visible regression | Per-feature eval gate before traffic shift; frontier remains routed |
-| GPU cold start / capacity spike | Latency or errors | Warm minimum replicas; gateway TTFT-timeout failover to frontier |
+| GPU cold start / capacity spike | Latency or errors | Warm minimum replicas; gateway TTFT-timeout failover (or hedging) to frontier |
 | Gateway compromise (holds all credentials) | Severe | Version pinning, isolated subnet, Secrets Manager, egress lockdown, audit |
 | Gateway as availability bottleneck | Platform-wide outage | ≥2 stateless replicas behind LB; Redis is the only shared state |
 | Orchestration state coupling creep into gateway/inference | Loss of isolation, scaling pain | Design invariant enforced in review; layer contracts documented here |
-| GPU spend exceeds frontier baseline | Negative ROI | Phase-gated rollout with cost dashboard as the scoreboard; Bedrock checkpoint before large-GPU commitments |
+| GPU spend exceeds frontier baseline | Negative ROI | Break-even gate from Phase 0 telemetry before ANY warm-GPU commitment; Bedrock checkpoint before large-GPU commitments; cost dashboard as the scoreboard |
+| Arabic quality gap in small open models | Phase 1 stalls or ships poor UX | Benchmark shortlist resolved during Phase 0; eval gates traffic shift; frontier stays routed |
 | Single engineer/bus-factor on platform ops | Operational fragility | Manifest/IaC-driven deploys; runbooks written during Phase 0–1 |
 
 ---
