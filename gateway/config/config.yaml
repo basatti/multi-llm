@@ -1,0 +1,100 @@
+# Canonical LiteLLM gateway config (AWS deployment).
+#
+# Products and orchestration request LOGICAL model names only. Each model_list
+# entry carries model_info.source (local | frontier); entries with source: local
+# MUST reference a model or adapter id from models/manifest.yaml via
+# model_info.manifest_id — enforced by scripts/validate_routes.py in CI.
+#
+# Secrets are never literal in this file: os.environ/ indirection only.
+# Local config for the compose harness lives in config.local.yaml.
+
+model_list:
+  # ── kleem-realtime: voice-turn path. Pinned warm local model, hard TTFT
+  #    budget; on TTFT timeout fail over to a fast frontier model (§7.1).
+  #    Hedged-request option (race local vs frontier) tracked in architecture.md §5.1.
+  - model_name: kleem-realtime
+    litellm_params:
+      model: hosted_vllm/base-bilingual-14b-awq
+      api_base: os.environ/VLLM_BASE_URL
+      stream_timeout: 0.4 # TTFT budget: ≤400 ms to first token (§7.1)
+      timeout: 30
+    model_info:
+      source: local
+      manifest_id: base-bilingual-14b-awq
+
+  - model_name: kleem-realtime-frontier
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+      timeout: 30
+    model_info:
+      source: frontier
+
+  # ── chat-default: general product chat/drafting tier (PMS, misc services).
+  - model_name: chat-default
+    litellm_params:
+      model: hosted_vllm/base-bilingual-14b-awq
+      api_base: os.environ/VLLM_BASE_URL
+      timeout: 120
+    model_info:
+      source: local
+      manifest_id: base-bilingual-14b-awq
+
+  - model_name: chat-default-frontier
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+      timeout: 120
+    model_info:
+      source: frontier
+
+  # ── qams-rag: quality tier, accuracy outranks cost (§7.3). Frontier primary
+  #    until Phase 3 benchmarks justify a local candidate.
+  - model_name: qams-rag
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+      timeout: 300
+    model_info:
+      source: frontier
+  # Phase 3 local candidate — enable only after accuracy benchmarks pass:
+  # - model_name: qams-rag
+  #   litellm_params:
+  #     model: hosted_vllm/<large-local-model>
+  #     api_base: os.environ/VLLM_BASE_URL
+  #   model_info:
+  #     source: local
+  #     manifest_id: <large-local-model>
+
+  # ── summarize-cheap: batch/async tier, no warm guarantee, no fallback needed
+  #    beyond retry (queue-based callers tolerate latency).
+  - model_name: summarize-cheap
+    litellm_params:
+      model: hosted_vllm/kleem-summarize-lora-v1
+      api_base: os.environ/VLLM_BASE_URL
+      timeout: 300
+    model_info:
+      source: local
+      manifest_id: kleem-summarize-lora-v1
+
+router_settings:
+  # Shared rate-limit counters / cooldowns across gateway replicas (§5.2)
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  num_retries: 1
+  fallbacks:
+    - kleem-realtime: ["kleem-realtime-frontier"]
+    - chat-default: ["chat-default-frontier"]
+    - summarize-cheap: ["chat-default-frontier"]
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 300
+  # Per-request cost/latency telemetry is the platform's source of truth (§9).
+  # Tenant attribution: callers MUST send metadata.tenant_id on tenant-scoped
+  # routes — see gateway/README.md.
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: false
