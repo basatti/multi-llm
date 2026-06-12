@@ -1,7 +1,10 @@
 .PHONY: up down logs test lint validate fmt tf-validate
 
-up: ## build and start the local harness
+up: ## build and start the local harness (mock backend)
 	docker compose up --build -d
+
+up-local-llm: ## start the harness routed at a real local LLM (Ollama/LM Studio)
+	docker compose -f docker-compose.yml -f docker-compose.local-llm.yml up --build -d
 
 down: ## stop the harness and drop volumes
 	docker compose down -v

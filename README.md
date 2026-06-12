@@ -70,6 +70,12 @@ curl -N -X POST http://localhost:8000/v1/apps/kleem-demo/invoke \
 # test the fallback chain: fail the local model, watch the frontier alias serve
 MOCK_FAIL_MODELS=base-bilingual-14b-awq make up
 
+# Route the gateway at a REAL local LLM on the host (Ollama by default;
+# set LOCAL_LLM_BASE_URL=http://host.docker.internal:1234/v1 for LM Studio).
+# Model id is fixed in gateway/config/config.local-llm.yaml — edit + recompose
+# to switch. The mock backend stays running as the frontier-fallback target.
+make up-local-llm
+
 # Langfuse UI: http://localhost:3000 (admin@onetechhub.local / LANGFUSE_INIT_USER_PASSWORD)
 ```
 

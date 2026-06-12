@@ -1,0 +1,21 @@
+# Compose overlay: route the gateway at a REAL local LLM on the host instead
+# of the mock backend.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local-llm.yml up -d
+#
+# host.docker.internal resolves to the host on Docker Desktop (Mac/Win).
+# extra_hosts adds the same mapping on Linux compose. LOCAL_LLM_BASE_URL
+# defaults to Ollama (11434); set to http://host.docker.internal:1234/v1 for
+# LM Studio. The mock backend stays running so frontier fallbacks still work.
+
+services:
+  litellm:
+    command: ["--config", "/etc/litellm/config.local-llm.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
