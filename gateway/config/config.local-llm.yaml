@@ -1,83 +1,52 @@
 # Local-harness overlay that routes the gateway at a REAL local LLM
-# (Ollama or LM Studio on the host), instead of the mock backend.
+# (Ollama or LM Studio on the dev machine), instead of the mock backend.
 #
-# Backend URL is env-configurable (Ollama 11434 vs LM Studio 1234):
-#   LOCAL_LLM_BASE_URL  default http://host.docker.internal:11434/v1
+# Backend URL is env-configurable:
+#   LOCAL_LLM_BASE_URL  default http://host.docker.internal:11434/v1  (Ollama)
+#   set to http://host.docker.internal:1234/v1                        (LM Studio)
 #
-# The physical model id is fixed below; to switch models, edit the four
-# `model:` lines and recompose. We deliberately resolve all three local
-# logical names to the same model — fine for a smoke test, and proves that
-# logical name routing is independent of physical capacity.
-#
-# Each local-backed route keeps a mock frontier fallback so the fallback
-# chain demo still works if Ollama is down — same contract as the AWS config.
+# The physical model ids assume Ollama on the dev box has llama3.1,
+# gemma4, and qwen2.5-coder pulled. Tweak `model:` lines as needed.
 
 model_list:
-  - model_name: kleem-realtime
+  - model_name: llama3.1
     litellm_params:
-      model: openai/qwen2.5:7b-instruct
-      api_base: os.environ/LOCAL_LLM_BASE_URL
-      api_key: ollama
-      timeout: 120
-    model_info:
-      source: local
-      manifest_id: base-bilingual-14b-awq
-
-  - model_name: kleem-realtime-frontier
-    litellm_params:
-      model: openai/mock-frontier-fast
-      api_base: http://mock-openai:8080/v1
-      api_key: mock-key
-      timeout: 30
-    model_info:
-      source: frontier
-
-  - model_name: chat-default
-    litellm_params:
-      model: openai/qwen2.5:7b-instruct
+      model: openai/llama3.1:8b
       api_base: os.environ/LOCAL_LLM_BASE_URL
       api_key: ollama
       timeout: 300
     model_info:
       source: local
-      manifest_id: base-bilingual-14b-awq
+      manifest_id: llama3.1-8b
 
-  - model_name: chat-default-frontier
+  - model_name: gemma4
     litellm_params:
-      model: openai/mock-frontier-default
-      api_base: http://mock-openai:8080/v1
-      api_key: mock-key
-      timeout: 120
-    model_info:
-      source: frontier
-
-  - model_name: qams-rag
-    litellm_params:
-      model: openai/mock-frontier-quality
-      api_base: http://mock-openai:8080/v1
-      api_key: mock-key
-      timeout: 300
-    model_info:
-      source: frontier
-
-  - model_name: summarize-cheap
-    litellm_params:
-      model: openai/qwen2.5:7b-instruct
+      model: openai/gemma4:latest
       api_base: os.environ/LOCAL_LLM_BASE_URL
       api_key: ollama
       timeout: 300
     model_info:
       source: local
-      manifest_id: kleem-summarize-lora-v1
+      manifest_id: gemma4-latest
+
+  - model_name: qwen2.5-coder
+    litellm_params:
+      model: openai/qwen2.5-coder:7b
+      api_base: os.environ/LOCAL_LLM_BASE_URL
+      api_key: ollama
+      timeout: 300
+    model_info:
+      source: local
+      manifest_id: qwen2.5-coder-7b
 
 router_settings:
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
   num_retries: 1
   fallbacks:
-    - kleem-realtime: ["kleem-realtime-frontier"]
-    - chat-default: ["chat-default-frontier"]
-    - summarize-cheap: ["chat-default-frontier"]
+    - llama3.1: ["gemma4"]
+    - gemma4: ["llama3.1"]
+    - qwen2.5-coder: ["llama3.1"]
 
 litellm_settings:
   drop_params: true

@@ -15,12 +15,6 @@ variable "instance_type" {
   default     = "g4dn.xlarge"
 }
 
-variable "vllm_model" {
-  description = "HuggingFace model id pulled by vLLM on first boot. AWQ keeps the 7B model on T4."
-  type        = string
-  default     = "Qwen/Qwen2.5-7B-Instruct-AWQ"
-}
-
 variable "orchestration_tag" {
   description = "ECR tag to deploy. Bump each time you push a new orchestration image."
   type        = string
@@ -34,16 +28,17 @@ variable "enable_schedule" {
 }
 
 variable "apps" {
-  description = "Apps registered on first boot. Each gets a virtual key in LiteLLM, a Langfuse prompt namespace, and an app_profiles row. Keys are written to SSM at /llm-platform/<env>/apps/{id}/api_key."
+  description = "Apps registered on first boot. Each gets a virtual key in LiteLLM scoped to one model, a Langfuse prompt namespace, and an app_profiles row. Keys are written to SSM at /llm-platform/<env>/apps/{id}/api_key. Re-scope freely via the LiteLLM admin UI (https://litellm.kleem.io/ui/) — these defaults are starting points only."
   type = list(object({
-    id          = string
-    owner       = string
-    cost_center = string
-    models      = list(string)
+    id           = string
+    owner        = string
+    cost_center  = string
+    models       = list(string)
+    primary_model = string
   }))
   default = [
-    { id = "kleem", owner = "voice-team", cost_center = "kleem-prod", models = ["chat-default", "kleem-realtime", "summarize-cheap"] },
-    { id = "pms", owner = "platform-team", cost_center = "pms-prod", models = ["chat-default", "summarize-cheap"] },
-    { id = "qams", owner = "accreditation-team", cost_center = "qams-prod", models = ["chat-default", "qams-rag", "summarize-cheap"] },
+    { id = "kleem", owner = "voice-team", cost_center = "kleem-prod", models = ["llama3.1"], primary_model = "llama3.1" },
+    { id = "pms", owner = "platform-team", cost_center = "pms-prod", models = ["gemma4"], primary_model = "gemma4" },
+    { id = "qams", owner = "accreditation-team", cost_center = "qams-prod", models = ["qwen2.5-coder"], primary_model = "qwen2.5-coder" },
   ]
 }

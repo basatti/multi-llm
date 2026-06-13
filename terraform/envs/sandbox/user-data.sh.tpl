@@ -17,7 +17,6 @@ ENV_NAME="${env_name}"
 ACCOUNT_ID="${account_id}"
 ORCH_IMAGE="${orchestration_image}"
 PUBLIC_DNS_NAME="${public_dns_name}"
-VLLM_MODEL="${vllm_model}"
 APPS_JSON='${apps}'
 
 echo "[boot] region=$REGION env=$ENV_NAME instance=$(hostname) public=$PUBLIC_DNS_NAME"
@@ -74,73 +73,50 @@ CREATE DATABASE langfuse;
 CREATE DATABASE orchestration;
 EOF
 
-cat >/opt/llm-platform/gateway/config/config.cloud.yaml <<EOF
+cat >/opt/llm-platform/gateway/config/config.cloud.yaml <<'GW_EOF'
+# Three real-named models served by Ollama on the same T4. Apps pass these
+# names in the OpenAI `model` field; virtual keys are scoped to one (or more)
+# at the LiteLLM admin layer. Each route falls back to a peer so requests
+# during a model-swap or warmup don't fail.
 model_list:
-  - model_name: kleem-realtime
+  - model_name: llama3.1
     litellm_params:
-      model: openai/$VLLM_MODEL
-      api_base: http://vllm:8000/v1
-      api_key: vllm
-      timeout: 120
-    model_info:
-      source: local
-      manifest_id: base-bilingual-14b-awq
-
-  - model_name: chat-default
-    litellm_params:
-      model: openai/$VLLM_MODEL
-      api_base: http://vllm:8000/v1
-      api_key: vllm
+      model: openai/llama3.1:8b
+      api_base: http://ollama:11434/v1
+      api_key: ollama
       timeout: 300
     model_info:
       source: local
-      manifest_id: base-bilingual-14b-awq
+      manifest_id: llama3.1-8b
 
-  - model_name: chat-default-frontier
+  - model_name: gemma4
     litellm_params:
-      model: openai/$VLLM_MODEL
-      api_base: http://vllm:8000/v1
-      api_key: vllm
-      timeout: 300
-    model_info:
-      source: frontier
-
-  - model_name: kleem-realtime-frontier
-    litellm_params:
-      model: openai/$VLLM_MODEL
-      api_base: http://vllm:8000/v1
-      api_key: vllm
-      timeout: 60
-    model_info:
-      source: frontier
-
-  - model_name: qams-rag
-    litellm_params:
-      model: openai/$VLLM_MODEL
-      api_base: http://vllm:8000/v1
-      api_key: vllm
-      timeout: 300
-    model_info:
-      source: frontier
-
-  - model_name: summarize-cheap
-    litellm_params:
-      model: openai/$VLLM_MODEL
-      api_base: http://vllm:8000/v1
-      api_key: vllm
+      model: openai/gemma4:latest
+      api_base: http://ollama:11434/v1
+      api_key: ollama
       timeout: 300
     model_info:
       source: local
-      manifest_id: kleem-summarize-lora-v1
+      manifest_id: gemma4-latest
+
+  - model_name: qwen2.5-coder
+    litellm_params:
+      model: openai/qwen2.5-coder:7b
+      api_base: http://ollama:11434/v1
+      api_key: ollama
+      timeout: 300
+    model_info:
+      source: local
+      manifest_id: qwen2.5-coder-7b
 
 router_settings:
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
   num_retries: 1
   fallbacks:
-    - kleem-realtime: ["kleem-realtime-frontier"]
-    - chat-default: ["chat-default-frontier"]
-    - summarize-cheap: ["chat-default-frontier"]
+    - llama3.1: ["gemma4"]
+    - gemma4: ["llama3.1"]
+    - qwen2.5-coder: ["llama3.1"]
 
 litellm_settings:
   drop_params: true
@@ -150,16 +126,15 @@ general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
   store_model_in_db: false
-EOF
+GW_EOF
 
 # Compose file: written with a quoted heredoc so shell does NOT expand $${VAR};
 # compose expands them from /opt/llm-platform/.env at `docker compose up`.
 cat >/opt/llm-platform/docker-compose.yml <<'COMPOSE_EOF'
 services:
-  vllm:
-    image: vllm/vllm-openai:v0.7.0
+  ollama:
+    image: ollama/ollama:latest
     runtime: nvidia
-    ipc: host
     deploy:
       resources:
         reservations:
@@ -168,23 +143,19 @@ services:
               count: 1
               capabilities: [gpu]
     environment:
-      HF_HUB_ENABLE_HF_TRANSFER: "1"
-      VLLM_MODEL: $${VLLM_MODEL}
-    command: >
-      --model $${VLLM_MODEL}
-      --quantization awq
-      --max-model-len 8192
-      --gpu-memory-utilization 0.85
-      --port 8000
-      --api-key vllm
+      # Keep a model in VRAM for 5 min after last use; only one model loaded at
+      # a time on a T4 (16 GB). Adjust if upgrading to a bigger GPU.
+      OLLAMA_KEEP_ALIVE: 5m
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_MAX_LOADED_MODELS: 1
     volumes:
-      - hf-cache:/root/.cache/huggingface
+      - ollama-data:/root/.ollama
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health\").read()' || exit 1"]
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 60
-      start_period: 300s
+      retries: 30
+      start_period: 60s
     restart: unless-stopped
 
   litellm:
@@ -204,7 +175,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      vllm:
+      ollama:
         condition: service_started
     restart: unless-stopped
 
@@ -345,14 +316,13 @@ services:
     restart: unless-stopped
 
 volumes:
-  hf-cache:
+  ollama-data:
   postgres-data:
   clickhouse-data:
   minio-data:
 COMPOSE_EOF
 
 cat >/opt/llm-platform/.env <<EOF
-VLLM_MODEL=$VLLM_MODEL
 ORCH_IMAGE=$ORCH_IMAGE
 LITELLM_MASTER_KEY=$LITELLM_MASTER_KEY
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
@@ -371,6 +341,21 @@ chmod 0600 /opt/llm-platform/.env
 cd /opt/llm-platform
 docker compose pull
 docker compose up -d
+
+# Pre-pull Ollama models so the first app request doesn't trigger a slow
+# initial download. Three models, ~5–10 GB each — total ~25 GB / ~10–15 min
+# on first boot. Idempotent across reboots (cache lives on the ollama-data
+# volume).
+echo "[ollama] waiting for service before pulling models"
+for i in $(seq 1 30); do
+  if docker exec llm-platform-ollama-1 ollama list >/dev/null 2>&1; then break; fi
+  sleep 5
+done
+echo "[ollama] pulling models"
+docker exec llm-platform-ollama-1 ollama pull llama3.1:8b
+docker exec llm-platform-ollama-1 ollama pull gemma4:latest
+docker exec llm-platform-ollama-1 ollama pull qwen2.5-coder:7b
+docker exec llm-platform-ollama-1 ollama list
 
 # ── wait for orchestration ──────────────────────────────────────────────────
 echo "[wait] orchestration /healthz"
@@ -392,7 +377,7 @@ echo "[register] apps"
 echo "$APPS_JSON" | jq -c '.[]' | while read -r app; do
   app_id=$(echo "$app" | jq -r '.id')
   echo "  $app_id"
-  payload=$(echo "$app" | jq '{app_id: .id, owner, cost_center, models, max_budget: 200, budget_duration: "30d", agent_config: {logical_model: "chat-default"}}')
+  payload=$(echo "$app" | jq '{app_id: .id, owner, cost_center, models, max_budget: 200, budget_duration: "30d", agent_config: {logical_model: .primary_model}}')
   resp=$(curl -sf -X POST http://localhost:8000/v1/apps -H "Content-Type: application/json" -d "$payload" || echo "")
   if [ -z "$resp" ]; then
     echo "    register failed"

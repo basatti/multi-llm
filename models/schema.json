@@ -20,7 +20,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "pattern": "^[a-z0-9][a-z0-9.\\-]*$",
           "description": "Unique physical model id, referenced by gateway routes via model_info.manifest_id"
         },
         "family": {
@@ -56,7 +56,8 @@
       "properties": {
         "engine": {
           "type": "string",
-          "enum": ["vllm"]
+          "enum": ["vllm", "ollama"],
+          "description": "vllm: one model pinned per container, max throughput. ollama: many models, hot-swap on demand, lower throughput. Use ollama on single-box GPU deploys serving multiple small models; vllm when one model needs all the GPU."
         },
         "instance_class": {
           "type": "string",
@@ -94,7 +95,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "pattern": "^[a-z0-9][a-z0-9.\\-]*$",
           "description": "Unique LoRA adapter id, also routable from the gateway via manifest_id"
         },
         "uri": {

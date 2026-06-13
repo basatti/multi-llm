@@ -1,27 +1,47 @@
-# Model manifest — the single source of truth for what the inference layer serves.
-# Every gateway route with `model_info.source: local` must reference an id (model
-# or adapter) from this file via `model_info.manifest_id`. CI enforces this
-# (scripts/validate_routes.py): a route to a non-manifested model cannot merge.
+# Model manifest — what the inference layer serves.
+# Every gateway route with `model_info.source: local` references one of these
+# ids via `model_info.manifest_id`. CI enforces it (scripts/validate_routes.py).
 #
-# NOTE: `base-bilingual-14b-awq` is a placeholder identity. The actual base model
-# is selected by the Phase 0 Arabic/English benchmark (architecture.md §11/§12);
-# the id, family, and weights_uri change in the same PR that adds its route.
+# Current single-box deploy uses Ollama (hot-swap, three small models share one
+# T4). Adapter/LoRA support and instance_class auto-scaling become relevant when
+# we add a second box dedicated to a high-throughput pinned vLLM model.
 
 models:
-  - id: base-bilingual-14b-awq
-    family: qwen2.5 # placeholder pending Phase 0 benchmark
-    weights_uri: s3://onetechhub-llm-weights/base-bilingual-14b-awq/
-    revision: "0000000000000000000000000000000000000000" # set on weight upload
-    quantization: awq
+  - id: llama3.1-8b
+    family: llama3.1
+    weights_uri: s3://onetechhub-llm-weights/llama3.1-8b/  # pulled at runtime by ollama; tracked for parity
+    revision: "ollama-registry-managed"
     serving:
-      engine: vllm
-      instance_class: g5.xlarge
-      max_model_len: 16384
+      engine: ollama
+      instance_class: g4dn.xlarge
+      max_model_len: 8192
       replicas:
-        min: 1 # warm minimum: one replica per actively routed model (§4.3)
-        max: 4
+        min: 1
+        max: 1
         scale_to_zero: false
-    adapters:
-      - id: kleem-summarize-lora-v1
-        uri: s3://onetechhub-llm-weights/adapters/kleem-summarize-lora-v1/
-        revision: "0000000000000000000000000000000000000000"
+
+  - id: gemma4-latest
+    family: gemma4
+    weights_uri: s3://onetechhub-llm-weights/gemma4-latest/
+    revision: "ollama-registry-managed"
+    serving:
+      engine: ollama
+      instance_class: g4dn.xlarge
+      max_model_len: 8192
+      replicas:
+        min: 1
+        max: 1
+        scale_to_zero: false
+
+  - id: qwen2.5-coder-7b
+    family: qwen2.5-coder
+    weights_uri: s3://onetechhub-llm-weights/qwen2.5-coder-7b/
+    revision: "ollama-registry-managed"
+    serving:
+      engine: ollama
+      instance_class: g4dn.xlarge
+      max_model_len: 8192
+      replicas:
+        min: 1
+        max: 1
+        scale_to_zero: false

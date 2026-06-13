@@ -33,8 +33,9 @@ from every product crosses the gateway.
 
 **The atomic-PR rule:** adding or moving a model = one PR changing
 `models/manifest.yaml` + `gateway/config/config.yaml` together. CI rejects
-routes to non-manifested models. Products never change — they only know
-logical names (`kleem-realtime`, `chat-default`, `qams-rag`, `summarize-cheap`).
+routes to non-manifested models. Apps call the gateway by model name
+(`llama3.1`, `gemma4`, `qwen2.5-coder` today); per-key scoping in LiteLLM
+controls what each app may invoke.
 
 ## Quickstart (local harness — no AWS, no GPUs)
 
@@ -45,7 +46,7 @@ make up    # litellm + postgres + redis + langfuse stack + orchestration + mock 
 # chat through the gateway (master key is fine locally)
 curl -s http://localhost:4000/v1/chat/completions \
   -H "Authorization: Bearer sk-local-dev-only" -H "Content-Type: application/json" \
-  -d '{"model": "chat-default", "messages": [{"role": "user", "content": "hi"}]}'
+  -d '{"model": "llama3.1", "messages": [{"role": "user", "content": "hi"}]}'
 
 # stateful session through orchestration (streams SSE)
 curl -s -X POST http://localhost:8000/v1/sessions \
@@ -67,8 +68,8 @@ curl -N -X POST http://localhost:8000/v1/apps/kleem-demo/invoke \
   -H "Content-Type: application/json" \
   -d '{"template_id":"system","variables":{"app_name":"Kleem"},"input":"hi"}'
 
-# test the fallback chain: fail the local model, watch the frontier alias serve
-MOCK_FAIL_MODELS=base-bilingual-14b-awq make up
+# test the fallback chain: fail one model, watch a peer model serve
+MOCK_FAIL_MODELS=llama3.1:8b make up
 
 # Route the gateway at a REAL local LLM on the host (Ollama by default;
 # set LOCAL_LLM_BASE_URL=http://host.docker.internal:1234/v1 for LM Studio).

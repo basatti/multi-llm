@@ -7,6 +7,18 @@
 
 ---
 
+## Current implementation note (2026-06-13)
+
+This doc describes the **target architecture**. The **current production deploy** (terraform/envs/sandbox, ~$155/mo with the cost-saving schedule) departs in two ways and the differences are deliberate:
+
+1. **Inference engine: Ollama, not vLLM.** vLLM is the right tool for one pinned high-throughput model. The current shape is three small models (llama3.1, gemma4, qwen2.5-coder) sharing one T4 via hot-swap — Ollama handles that natively. vLLM remains the future option for a dedicated high-throughput model when traffic justifies a second box (the §4.1 escape hatch).
+
+2. **Gateway model names are real model names, not logical app-coupled aliases.** The doc references `kleem-realtime`, `chat-default`, `qams-rag`, `summarize-cheap` throughout — those reflected the Phase 1+ design where logical names abstracted the physical model. In the current deploy, app keys are scoped at the LiteLLM layer (via the admin UI) and the model field carries the literal model name (`llama3.1`, `gemma4`, `qwen2.5-coder`). When the platform grows back to multiple deployments per logical role, we'll layer the logical names back in.
+
+Layer isolation, gateway-as-front-door, atomic manifest+route PRs, secrets policy, and the rollout phases all stand as written.
+
+---
+
 ## 1. Executive summary
 
 1TechHub currently powers AI features across its SaaS products (Kleem, PMS, Qams) through direct frontier-model API integrations, with API keys embedded per service. This works but does not scale organizationally or financially: every product re-implements model access, cost is opaque and unattributable, latency-critical features (Kleem voice) compete with batch workloads, and we have no path to self-hosted models for cost control, fine-tuning, or data residency.

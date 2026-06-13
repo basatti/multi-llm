@@ -305,7 +305,6 @@ resource "aws_instance" "this" {
     orchestration_image = "${aws_ecr_repository.orchestration.repository_url}:${var.orchestration_tag}"
     public_dns_name     = "llm.kleem.io"
     apps                = jsonencode(var.apps)
-    vllm_model          = var.vllm_model
   })
 
   # First-boot user-data only runs once. Don't trigger instance replacement on

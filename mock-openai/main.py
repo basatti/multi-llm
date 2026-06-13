@@ -21,11 +21,9 @@ from fastapi.responses import StreamingResponse
 app = FastAPI(title="mock-openai")
 
 MODELS = [
-    "base-bilingual-14b-awq",
-    "kleem-summarize-lora-v1",
-    "mock-frontier-fast",
-    "mock-frontier-default",
-    "mock-frontier-quality",
+    "llama3.1:8b",
+    "gemma4:latest",
+    "qwen2.5-coder:7b",
 ]
 
 
