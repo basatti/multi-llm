@@ -10,6 +10,13 @@ PMS is **already AI-enabled** end-to-end. The backend (NestJS at `pms/apps/api`)
 
 **Integration is two env vars.** LiteLLM speaks the OpenAI wire protocol. Set the OpenAI provider's `baseURL` to our gateway and `OPENAI_API_KEY` to the PMS virtual key — every existing AI route in PMS works against our self-hosted models with no other code changes.
 
+## Status (2026-06-14)
+
+- ✅ **Tier 1**: Patch landed on PMS branch `feat/llm-platform-integration` (commits `6d915037`, `71dc98ad`): `OPENAI_BASE_URL` override in `AiRuntimeConfigService` + `metadata.tenant_id` / `metadata.feature` passthrough on OpenAI calls + `LlmCallOptions` interface + smoke harness at `apps/api/scripts/llm-platform-smoke.ts`. End-to-end verified against `https://llm.kleem.io` — `draft-tasks`, `summarize-report`, `suggest-query` request shapes all return valid JSON via the patched client.
+- ✅ **PMS LiteLLM key broadened** to `llama3.1` + `gemma4` + `qwen2.5-coder` so Tier 2 endpoints can pick per use case.
+- 📐 **Tier 2 design** — see [`pms-tier2-design.md`](pms-tier2-design.md): quotation drafting + help-desk triage. Three small PRs.
+- 📐 **Tier 3 design** — see [`pms-tier3-semantic-search.md`](pms-tier3-semantic-search.md): pgvector + Bedrock Titan embeddings via the gateway.
+
 ---
 
 ## Current state (as of 2026-06-14, pms main @ 790fad48)
