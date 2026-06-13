@@ -11,6 +11,12 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+# Saved plan files — binary artifacts of `terraform plan -out=<file>`. They
+# regenerate on every plan, can contain rendered user_data + resource detail,
+# and have no business in git.
+tfplan
+*.tfplan
+*.tfplan.binary
 
 # Python
 __pycache__/
