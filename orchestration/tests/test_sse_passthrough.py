@@ -73,7 +73,7 @@ def send_and_collect(client: TestClient, session_id: str, content: str) -> str:
 
 def test_session_flow_streams_and_persists_history(client: TestClient):
     session_id = client.post(
-        "/v1/sessions", json={"product": "kleem", "tenant_id": "t1"}
+        "/v1/sessions", json={"product": "demo-app", "tenant_id": "t1"}
     ).json()["session_id"]
 
     # Turn 1: gateway sees exactly 1 message (the user's)

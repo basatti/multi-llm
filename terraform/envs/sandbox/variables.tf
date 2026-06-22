@@ -28,7 +28,7 @@ variable "enable_schedule" {
 }
 
 variable "apps" {
-  description = "Apps registered on first boot. Each gets a virtual key in LiteLLM scoped to one model, a Langfuse prompt namespace, and an app_profiles row. Keys are written to SSM at /llm-platform/<env>/apps/{id}/api_key. Re-scope freely via the LiteLLM admin UI (https://litellm.kleem.io/ui/) — these defaults are starting points only."
+  description = "Applications registered on first boot. Each gets a virtual key in LiteLLM scoped to one model, a Langfuse prompt namespace, and an app_profiles row. Keys are written to SSM at /llm-platform/<env>/apps/{id}/api_key. Re-scope freely via the LiteLLM admin UI at /ui/ on the gateway — these defaults are example starting points. For your own deployment, override the list here or pass --var-file."
   type = list(object({
     id           = string
     owner        = string
@@ -37,8 +37,8 @@ variable "apps" {
     primary_model = string
   }))
   default = [
-    { id = "kleem", owner = "voice-team", cost_center = "kleem-prod", models = ["llama3.1"], primary_model = "llama3.1" },
-    { id = "pms", owner = "platform-team", cost_center = "pms-prod", models = ["gemma4"], primary_model = "gemma4" },
-    { id = "qams", owner = "accreditation-team", cost_center = "qams-prod", models = ["qwen2.5-coder"], primary_model = "qwen2.5-coder" },
+    { id = "app-realtime", owner = "team-realtime", cost_center = "app-realtime-prod", models = ["llama3.1"], primary_model = "llama3.1" },
+    { id = "app-drafting", owner = "team-drafting", cost_center = "app-drafting-prod", models = ["gemma4"], primary_model = "gemma4" },
+    { id = "app-coder",    owner = "team-coder",    cost_center = "app-coder-prod",    models = ["qwen2.5-coder"], primary_model = "qwen2.5-coder" },
   ]
 }

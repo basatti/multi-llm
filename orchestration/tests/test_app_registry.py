@@ -135,27 +135,27 @@ def test_register_fans_out_to_gateway_langfuse_and_registry(client, langfuse_cal
     resp = client.post(
         "/v1/apps",
         json={
-            "app_id": "qams",
+            "app_id": "app-quality",
             "owner": "ai-team",
-            "cost_center": "qams-prod",
-            "models": ["chat-default", "qams-rag"],
-            "agent_config": {"logical_model": "qams-rag"},
+            "cost_center": "app-quality-prod",
+            "models": ["chat-default", "quality-rag"],
+            "agent_config": {"logical_model": "quality-rag"},
         },
     )
     assert resp.status_code == 201
     payload = resp.json()
-    assert payload["virtual_key"].startswith("sk-vk-qams")
-    assert payload["langfuse_prompt_namespace"] == "qams"
-    assert ("create", "qams/system") in langfuse_calls
+    assert payload["virtual_key"].startswith("sk-vk-app-quality")
+    assert payload["langfuse_prompt_namespace"] == "app-quality"
+    assert ("create", "app-quality/system") in langfuse_calls
 
-    profile = client.get("/v1/apps/qams").json()
+    profile = client.get("/v1/apps/app-quality").json()
     assert profile["owner"] == "ai-team"
-    assert profile["cost_center"] == "qams-prod"
-    assert profile["agent_config"]["logical_model"] == "qams-rag"
+    assert profile["cost_center"] == "app-quality-prod"
+    assert profile["agent_config"]["logical_model"] == "quality-rag"
 
 
 def test_register_rejects_duplicate(client):
-    body = {"app_id": "pms", "owner": "ops", "cost_center": "pms-prod"}
+    body = {"app_id": "app-ops", "owner": "ops", "cost_center": "app-ops-prod"}
     assert client.post("/v1/apps", json=body).status_code == 201
     assert client.post("/v1/apps", json=body).status_code == 409
 
@@ -164,11 +164,11 @@ def test_invoke_compiles_template_and_uses_app_virtual_key(client, gateway_calls
     client.post(
         "/v1/apps",
         json={
-            "app_id": "kleem",
+            "app_id": "app-realtime",
             "owner": "voice-team",
-            "cost_center": "kleem-prod",
+            "cost_center": "app-realtime-prod",
             "agent_config": {
-                "logical_model": "kleem-realtime",
+                "logical_model": "realtime-chat",
                 "sampling_defaults": {"temperature": 0.2},
             },
         },
@@ -176,8 +176,8 @@ def test_invoke_compiles_template_and_uses_app_virtual_key(client, gateway_calls
 
     with client.stream(
         "POST",
-        "/v1/apps/kleem/invoke",
-        headers={"Authorization": "Bearer sk-vk-kleem-from-caller"},
+        "/v1/apps/app-realtime/invoke",
+        headers={"Authorization": "Bearer sk-vk-app-realtime-from-caller"},
         json={
             "template_id": "system",
             "variables": {"persona": "a polite assistant"},
@@ -190,9 +190,9 @@ def test_invoke_compiles_template_and_uses_app_virtual_key(client, gateway_calls
     assert "data: [DONE]" in body
 
     call = gateway_calls[-1]
-    assert call["model"] == "kleem-realtime"
-    assert call["auth"] == "Bearer sk-vk-kleem-from-caller"
-    assert call["metadata"] == {"app_id": "kleem", "tenant_id": "acme"}
+    assert call["model"] == "realtime-chat"
+    assert call["auth"] == "Bearer sk-vk-app-realtime-from-caller"
+    assert call["metadata"] == {"app_id": "app-realtime", "tenant_id": "acme"}
     assert call["temperature"] == 0.2
     # Template was compiled before the call (no {{persona}} placeholder leaks)
     system_msg = next(m for m in call["messages"] if m["role"] == "system")

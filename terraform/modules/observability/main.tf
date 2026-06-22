@@ -20,8 +20,8 @@ resource "aws_cloudwatch_dashboard" "platform" {
         markdown = join("\n", [
           "# LLM Platform — ${var.env}",
           "Required dashboards (architecture.md §9), populated during Phase 0:",
-          "1. Cost per product per day, local vs frontier (the migration scoreboard)",
-          "2. TTFT p50/p95/p99 per logical model (Kleem SLO view)",
+          "1. Cost per application per day, local vs frontier (the migration scoreboard)",
+          "2. TTFT p50/p95/p99 per logical model (realtime SLO view)",
           "3. GPU utilization vs queue depth per deployment",
           "4. Fallback rate per logical name (earliest capacity/health warning)",
           "5. Error and retry rates per backend",

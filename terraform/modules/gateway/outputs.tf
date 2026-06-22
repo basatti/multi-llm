@@ -1,5 +1,5 @@
 output "alb_dns_name" {
-  description = "Internal gateway endpoint; map llm-gateway.internal.1techhub to this"
+  description = "Internal gateway endpoint; map your internal DNS record (e.g. llm-gateway.internal) to this"
   value       = aws_lb.this.dns_name
 }
 

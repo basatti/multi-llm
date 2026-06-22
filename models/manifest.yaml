@@ -3,13 +3,16 @@
 # ids via `model_info.manifest_id`. CI enforces it (scripts/validate_routes.py).
 #
 # Current single-box deploy uses Ollama (hot-swap, three small models share one
-# T4). Adapter/LoRA support and instance_class auto-scaling become relevant when
-# we add a second box dedicated to a high-throughput pinned vLLM model.
+# 16 GB GPU). Adapter/LoRA support and instance_class auto-scaling become
+# relevant when adding a second box dedicated to a high-throughput pinned vLLM
+# model. weights_uri is informational here — Ollama pulls from its own
+# registry at runtime; the field is tracked for parity with vLLM/HF deployments
+# that load from object storage.
 
 models:
   - id: llama3.1-8b
     family: llama3.1
-    weights_uri: s3://onetechhub-llm-weights/llama3.1-8b/  # pulled at runtime by ollama; tracked for parity
+    weights_uri: s3://your-weights-bucket/llama3.1-8b/  # pulled at runtime by ollama; tracked for parity
     revision: "ollama-registry-managed"
     serving:
       engine: ollama
@@ -22,7 +25,7 @@ models:
 
   - id: gemma4-latest
     family: gemma4
-    weights_uri: s3://onetechhub-llm-weights/gemma4-latest/
+    weights_uri: s3://your-weights-bucket/gemma4-latest/
     revision: "ollama-registry-managed"
     serving:
       engine: ollama
@@ -35,7 +38,7 @@ models:
 
   - id: qwen2.5-coder-7b
     family: qwen2.5-coder
-    weights_uri: s3://onetechhub-llm-weights/qwen2.5-coder-7b/
+    weights_uri: s3://your-weights-bucket/qwen2.5-coder-7b/
     revision: "ollama-registry-managed"
     serving:
       engine: ollama

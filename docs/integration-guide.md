@@ -1,32 +1,37 @@
-# Integration guide — Kleem, PMS, Qams
+# Client integration guide
 
-How each product connects to the shared LLM platform at **`https://llm.kleem.io`**.
+How an application connects to the LLM platform.
 
-The gateway is OpenAI wire-compatible. Any client that targets the OpenAI API works by setting two things: the base URL, and the API key.
+The gateway is OpenAI wire-compatible. Any client that targets the OpenAI API
+works by setting two things: the base URL, and the API key.
+
+Throughout this guide, **`https://<gateway-host>`** is the URL of your
+gateway deployment — `https://localhost:4000` for the local harness, or the
+hostname of your production endpoint (e.g. `https://llm.example.com`).
 
 ---
 
 ## Endpoint
 
 ```
-Base URL:           https://llm.kleem.io/v1
-Chat completions:   POST https://llm.kleem.io/v1/chat/completions
-Models list:        GET  https://llm.kleem.io/v1/models
-Health:             GET  https://llm.kleem.io/health/liveliness
+Base URL:           https://<gateway-host>/v1
+Chat completions:   POST https://<gateway-host>/v1/chat/completions
+Models list:        GET  https://<gateway-host>/v1/models
+Health:             GET  https://<gateway-host>/health/liveliness
 ```
 
-TLS via `*.kleem.io` ACM cert. The gateway terminates TLS, authenticates the
-virtual key, routes to one of the three hosted models, streams tokens back
-unbuffered, and logs cost + latency telemetry.
+The gateway terminates TLS (when fronted by a reverse proxy or ALB),
+authenticates the virtual key, routes to the requested model, streams
+tokens back unbuffered, and logs cost + latency telemetry.
 
 ---
 
 ## Models
 
-Three local models share one T4 GPU (16 GB VRAM) via Ollama hot-swap: only
-one is GPU-resident at any moment; the active one swaps when a request
-targets a different model. First request after a swap is slower (~10–20 s
-warm-up); subsequent calls are fast.
+The default deployment hosts three open-weight models on a single GPU via
+Ollama hot-swap: only one is GPU-resident at any moment; the active one
+swaps when a request targets a different model. First request after a swap
+is slower (~10–20 s warm-up); subsequent calls are fast.
 
 | Model name (use in the `model` field) | Sweet spot |
 |---|---|
@@ -35,39 +40,54 @@ warm-up); subsequent calls are fast.
 | `qwen2.5-coder` | Code generation, structured extraction, technical text (Qwen 2.5 Coder 7B) |
 
 Re-scoping any key to a different (or additional) model is a config change in
-the LiteLLM admin UI (`https://litellm.kleem.io/ui/`) — no app redeploy.
+the LiteLLM admin UI (`https://<gateway-host>/ui/`) — no application redeploy.
+
+To add a model: update `models/manifest.yaml` and
+`gateway/config/config.cloud.yaml` together in one PR (the atomic-PR rule).
+For Ollama-served models, also `docker compose exec ollama ollama pull <tag>`
+on the host.
 
 ---
 
 ## Authentication
 
-Each app has its own virtual key, bound to one model by default. **Never
-commit a key to the repo.** Pull from AWS SSM at app startup or read from
-the app's own deploy env:
+Each application has its own virtual key, bound to one (or more) models.
+**Never commit a key to the repo.** Pull it from your secret manager at
+application startup — AWS SSM, HashiCorp Vault, Doppler, a sealed K8s
+secret, or whatever you already use.
+
+Example with AWS SSM:
 
 ```bash
-aws ssm get-parameter --region ap-south-1 \
-  --name /llm-platform/prod/apps/<app>/api_key \
+aws ssm get-parameter --region <your-region> \
+  --name /llm-platform/<env>/apps/<app-id>/api_key \
   --with-decryption --query Parameter.Value --output text
 ```
 
-Default starting assignment (re-scope freely in the LiteLLM UI):
+To issue a new key (operator action — needs the LiteLLM master key):
 
-| App | SSM parameter path | Model |
-|---|---|---|
-| Kleem | `/llm-platform/prod/apps/kleem/api_key` | `llama3.1` |
-| PMS | `/llm-platform/prod/apps/pms/api_key` | `gemma4` |
-| Qams | `/llm-platform/prod/apps/qams/api_key` | `qwen2.5-coder` |
+```bash
+curl -sS -X POST https://<gateway-host>/key/generate \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key_alias": "my-app",
+    "models": ["llama3.1"],
+    "max_budget": 50,
+    "budget_duration": "30d",
+    "metadata": {"tenant_id": "my-app"}
+  }'
+```
 
 A request to a model the key isn't scoped to returns `401`.
 
 ---
 
-## Tenant attribution (mandatory for tenant-scoped products)
+## Tenant attribution (mandatory for multi-tenant applications)
 
-Tenant-scoped products **must** send `metadata.tenant_id` on every request.
-It lands in the gateway log alongside the virtual key, model, cost, and
-latency — that's how we attribute spend per tenant.
+Multi-tenant applications **must** send `metadata.tenant_id` on every
+request. It lands in the gateway log alongside the virtual key, model,
+cost, and latency — that's how spend is attributed per tenant.
 
 ```json
 {
@@ -77,18 +97,21 @@ latency — that's how we attribute spend per tenant.
 }
 ```
 
+`metadata.feature` is also useful — it lets you separate spend by call site
+(e.g. `summarisation` vs `chat` vs `drafting`) within the same application.
+
 ---
 
-## Per-product wiring
+## Snippets
 
-### Kleem (TypeScript)
+### Node / TypeScript
 
 ```ts
 import OpenAI from "openai";
 
 const llm = new OpenAI({
-  baseURL: "https://llm.kleem.io/v1",
-  apiKey: process.env.LLM_PLATFORM_KEY,        // pulled from SSM at boot
+  baseURL: "https://<gateway-host>/v1",
+  apiKey: process.env.LLM_PLATFORM_KEY,        // pulled from your secret store at boot
 });
 
 // Streaming chat turn
@@ -97,7 +120,7 @@ const turn = await llm.chat.completions.create({
   messages,
   stream: true,
   // @ts-expect-error - metadata passthrough
-  metadata: { tenant_id: session.tenantId },
+  metadata: { tenant_id: session.tenantId, feature: "chat" },
 });
 
 for await (const chunk of turn) {
@@ -105,47 +128,26 @@ for await (const chunk of turn) {
   // pipe to TTS / UI / etc.
 }
 
-// One-shot non-stream (e.g. post-call summary)
+// One-shot non-stream
 const summary = await llm.chat.completions.create({
-  model: "llama3.1",
+  model: "gemma4",
   messages: [
-    { role: "system", content: "Summarize the call in 3 bullets." },
+    { role: "system", content: "Summarize the conversation in 3 bullets." },
     { role: "user", content: transcript },
   ],
   // @ts-expect-error
-  metadata: { tenant_id: call.tenantId },
+  metadata: { tenant_id: call.tenantId, feature: "summary" },
 });
 ```
 
-### PMS (TypeScript)
-
-```ts
-import OpenAI from "openai";
-
-const llm = new OpenAI({
-  baseURL: "https://llm.kleem.io/v1",
-  apiKey: process.env.LLM_PLATFORM_KEY,
-});
-
-const draft = await llm.chat.completions.create({
-  model: "gemma4",
-  messages: [
-    { role: "system", content: "You are a property-listing copywriter." },
-    { role: "user", content: prompt },
-  ],
-  // @ts-expect-error
-  metadata: { tenant_id: property.tenantId, feature: "listing_draft" },
-});
-```
-
-### Qams (Python)
+### Python
 
 ```python
 import os
 from openai import OpenAI
 
 llm = OpenAI(
-    base_url="https://llm.kleem.io/v1",
+    base_url="https://<gateway-host>/v1",
     api_key=os.environ["LLM_PLATFORM_KEY"],
 )
 
@@ -155,9 +157,9 @@ resp = llm.chat.completions.create(
         {"role": "system", "content": rubric_prompt},
         {"role": "user", "content": retrieved_evidence_block},
     ],
-    extra_body={"metadata": {"tenant_id": tenant_id, "feature": "inspection"}},
+    extra_body={"metadata": {"tenant_id": tenant_id, "feature": "extraction"}},
 )
-verdict = resp.choices[0].message.content
+result = resp.choices[0].message.content
 ```
 
 ---
@@ -165,11 +167,12 @@ verdict = resp.choices[0].message.content
 ## Streaming (SSE)
 
 Set `stream: true` — token-level delivery is preserved end-to-end (gateway,
-ALB, and Ollama all flush per chunk). Client disconnects propagate as
-upstream cancellation, freeing the GPU slot immediately.
+any TLS-terminating proxy, and the inference backend all flush per chunk).
+Client disconnects propagate as upstream cancellation, freeing the GPU slot
+immediately.
 
 ```bash
-curl -N https://llm.kleem.io/v1/chat/completions \
+curl -N https://<gateway-host>/v1/chat/completions \
   -H "Authorization: Bearer $LLM_PLATFORM_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -189,20 +192,20 @@ curl -N https://llm.kleem.io/v1/chat/completions \
 | `401` | Missing/invalid `Authorization: Bearer …`, OR the key isn't scoped to the requested model |
 | `429` | Per-key rate limit or budget cap hit. Check the key's budget in the LiteLLM admin UI |
 | `400` | Malformed request — usually `messages` shape or unknown model name |
-| `500` / `502` | Backend failure — gateway should fall back automatically (each model falls back to a peer model); if you see persistent 502, something deeper is wrong |
-| `504` | Backend timed out at the ALB. **Most common cause: the EC2 was stopped by the cost-saving schedule (22:00 IST weekdays + weekends).** Start with `aws ec2 start-instances --instance-ids i-07b8afbda6a412aa3 --region ap-south-1` or wait for the 08:00 IST start. ~1 minute to recover (model cache survives) |
+| `500` / `502` | Backend failure — gateway falls back automatically (each model falls back to a peer model); if you see persistent 502, something deeper is wrong |
+| `504` | Backend timed out at the proxy/load-balancer in front of the gateway. Most common cause: the inference host is stopped or unreachable. Check that the GPU host is up and that the gateway can resolve `ollama:11434`. |
 
 ---
 
 ## First-call latency
 
-On a cold model (first request after a swap or a fresh box):
+On a cold model (first request after a swap or a fresh boot):
 
 | Scenario | TTFT |
 |---|---|
-| Box just started, no model loaded | ~30–60 s (model loads into VRAM from EBS) |
-| Box warm, different model active | ~10–20 s (swap) |
-| Box warm, requested model already active | ~200–800 ms |
+| Host just started, no model loaded | ~30–60 s (model loads into VRAM from disk) |
+| Host warm, different model active | ~10–20 s (swap) |
+| Host warm, requested model already active | ~200–800 ms |
 
 If you're benchmarking or building anything latency-sensitive, send a warm-up
 request 5–10 s before the real one — that puts the model in VRAM and the
@@ -212,23 +215,25 @@ real call hits the fast path.
 
 ## Operational notes
 
-- **Cost-aware schedule:** the EC2 stops at 22:00 IST weekdays + all weekend; starts at 08:00 IST weekdays. ~60% savings vs always-on. Plan demos accordingly. Override per [CLAUDE.md §10](../CLAUDE.md).
-- **Logs and traces:** every request is logged at the gateway + traced in Langfuse (`https://langfuse.kleem.io`). For per-tenant cost questions, that's the source of truth.
-- **Rotating a key:** issue a new one via the LiteLLM admin UI (`https://litellm.kleem.io/ui/`) → Virtual Keys → Create Key, deploy to the app, then revoke the old one. Keys don't expire on their own.
+- **Cost-aware scheduling (cloud deployments):** some operators run an
+  EventBridge/cron rule that stops the GPU host outside business hours.
+  Clients that hit the gateway during off-hours will see `504` until the
+  host starts. Plan demos accordingly.
+- **Logs and traces:** every request is logged at the gateway and traced in
+  Langfuse (`http://<gateway-host>:3000` in the default deployment). For
+  per-tenant cost questions, that's the source of truth.
+- **Rotating a key:** issue a new one via the LiteLLM admin UI
+  (`https://<gateway-host>/ui/`) → Virtual Keys → Create Key, deploy to the
+  application, then revoke the old one. Keys don't expire on their own.
 
 ---
 
 ## Quick smoke test
 
 ```bash
-# Replace <app> with kleem | pms | qams
-KEY=$(aws ssm get-parameter --region ap-south-1 \
-  --name /llm-platform/prod/apps/<app>/api_key \
-  --with-decryption --query Parameter.Value --output text)
+KEY=<your-virtual-key>
 
-# Use the model that <app> is scoped to (llama3.1 for kleem, gemma4 for pms,
-# qwen2.5-coder for qams by default)
-curl -s https://llm.kleem.io/v1/chat/completions \
+curl -s https://<gateway-host>/v1/chat/completions \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -239,4 +244,4 @@ curl -s https://llm.kleem.io/v1/chat/completions \
   }'
 ```
 
-A 200 with a model response confirms the path end-to-end.
+A `200` with a model response confirms the path end-to-end.

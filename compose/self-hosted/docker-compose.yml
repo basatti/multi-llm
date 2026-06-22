@@ -1,18 +1,48 @@
-# Local dev harness: proves the routing / virtual-key / streaming / fallback
-# contract and the §6.4 app-registry + Langfuse contract with no AWS, no GPUs,
-# no frontier spend. See README.md quickstart.
+# Self-hosted GPU deployment (any Linux host with an NVIDIA GPU + Docker +
+# NVIDIA Container Toolkit). See docs/deploy-self-hosted.md for the runbook.
 #
-# Copy .env.example to .env first.
+# Mirrors the production stack that terraform/envs/sandbox/user-data.sh.tpl
+# bootstraps on AWS, minus AWS-specific glue (ECR login, SSM secret fetch,
+# Route53/ALB TLS). All secrets live in .env (gitignored).
 
 services:
+  ollama:
+    image: ollama/ollama:latest
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      # Keep a model in VRAM for 5 min after last use. Increase for fewer cold
+      # swaps, decrease for tighter VRAM pressure.
+      OLLAMA_KEEP_ALIVE: 5m
+      OLLAMA_NUM_PARALLEL: 1
+      # Single 16 GB GPU fits one of llama3.1:8b / gemma4 / qwen2.5-coder:7b at
+      # a time. Raise on a larger GPU (e.g. 2 on a 24 GB card).
+      OLLAMA_MAX_LOADED_MODELS: 1
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+
   litellm:
-    build: ./gateway
-    command: ["--config", "/etc/litellm/config.local.yaml", "--port", "4000"]
+    build:
+      context: ../../gateway
+    command: ["--config", "/etc/litellm/config.cloud.yaml", "--port", "4000"]
     ports:
       - "4000:4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      DATABASE_URL: postgresql://platform:${POSTGRES_PASSWORD}@postgres:5432/litellm
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     depends_on:
@@ -20,29 +50,30 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      mock-openai:
+      ollama:
         condition: service_started
+    restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_USER: platform
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      # Created automatically; the init script adds langfuse + orchestration.
       POSTGRES_DB: litellm
     volumes:
-      - ./compose/postgres-init:/docker-entrypoint-initdb.d:ro
       - postgres-data:/var/lib/postgresql/data
+      - ../postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U platform"]
       interval: 2s
       timeout: 3s
       retries: 30
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
 
-  # ── §6.4 stack: Langfuse v3 (web + worker + clickhouse + minio) ─────────────
   clickhouse:
     image: clickhouse/clickhouse-server:24.3
     environment:
@@ -59,22 +90,24 @@ services:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8123/ping || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 30
+    mem_limit: 3g
+    restart: unless-stopped
 
   minio:
     image: minio/minio:RELEASE.2024-08-29T01-40-52Z
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_USER: langfuse-minio
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
       - minio-data:/data
     healthcheck:
-      # mc is in the image; curl is not.
       test: ["CMD-SHELL", "mc ready local || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 30
+    restart: unless-stopped
 
   langfuse-worker:
     image: langfuse/langfuse-worker:3
@@ -88,7 +121,7 @@ services:
       redis:
         condition: service_started
     environment: &langfuse-env
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/langfuse
+      DATABASE_URL: postgresql://platform:${POSTGRES_PASSWORD}@postgres:5432/langfuse
       SALT: ${LANGFUSE_SALT}
       ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
       TELEMETRY_ENABLED: "false"
@@ -100,13 +133,15 @@ services:
       CLICKHOUSE_CLUSTER_ENABLED: "false"
       LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
       LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
-      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse-minio
       LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
       LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+    mem_limit: 2g
+    restart: unless-stopped
 
   langfuse-web:
     image: langfuse/langfuse:3
@@ -117,30 +152,33 @@ services:
       - "3000:3000"
     environment:
       <<: *langfuse-env
-      NEXTAUTH_URL: http://localhost:3000
+      # If reaching Langfuse over Tailscale by hostname, set
+      # NEXTAUTH_URL=http://<tailscale-host>:3000 in .env so login redirects work.
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
-      # Deterministic init: orchestration uses the same keys without manual setup
-      LANGFUSE_INIT_ORG_ID: llm-platform
-      LANGFUSE_INIT_ORG_NAME: LLM Platform
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-self-hosted}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-Self-Hosted}
       LANGFUSE_INIT_PROJECT_ID: llm-platform
       LANGFUSE_INIT_PROJECT_NAME: llm-platform
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
-      LANGFUSE_INIT_USER_EMAIL: admin@local
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@local}
       LANGFUSE_INIT_USER_NAME: admin
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+    mem_limit: 2g
+    restart: unless-stopped
 
   orchestration:
-    build: ./orchestration
+    build:
+      context: ../../orchestration
     ports:
       - "8000:8000"
     environment:
       ORCH_GATEWAY_BASE_URL: http://litellm:4000
-      ORCH_GATEWAY_VIRTUAL_KEY: ${ORCH_GATEWAY_VIRTUAL_KEY:-${LITELLM_MASTER_KEY}}
-      # Admin key drives the registration fan-out (§6.4)
+      ORCH_GATEWAY_VIRTUAL_KEY: ${LITELLM_MASTER_KEY}
       ORCH_GATEWAY_ADMIN_KEY: ${LITELLM_MASTER_KEY}
       ORCH_REDIS_URL: redis://redis:6379/0
-      ORCH_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/orchestration
+      ORCH_DATABASE_URL: postgresql://platform:${POSTGRES_PASSWORD}@postgres:5432/orchestration
       ORCH_LANGFUSE_HOST: http://langfuse-web:3000
       ORCH_LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       ORCH_LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
@@ -153,15 +191,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-
-  mock-openai:
-    # No host port: only litellm needs to reach it, via the compose network as
-    # mock-openai:8080. Avoids collisions with anything else on host :8080.
-    build: ./mock-openai
-    environment:
-      MOCK_FAIL_MODELS: ${MOCK_FAIL_MODELS:-}
+    restart: unless-stopped
 
 volumes:
+  ollama-data:
   postgres-data:
   clickhouse-data:
   minio-data:

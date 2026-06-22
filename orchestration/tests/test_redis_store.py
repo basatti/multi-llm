@@ -11,13 +11,13 @@ def make_store() -> RedisSessionStore:
 
 async def test_create_append_round_trip():
     store = make_store()
-    await store.create(Session(id="s1", product="kleem", tenant_id="t1"))
+    await store.create(Session(id="s1", product="demo-app", tenant_id="t1"))
     await store.append("s1", Message(role="user", content="hi"))
     await store.append("s1", Message(role="assistant", content="hello"))
 
     loaded = await store.get("s1")
     assert loaded is not None
-    assert loaded.product == "kleem"
+    assert loaded.product == "demo-app"
     assert loaded.tenant_id == "t1"
     assert [(m.role, m.content) for m in loaded.messages] == [
         ("user", "hi"),

@@ -10,7 +10,7 @@ terraform {
 
   # Enable once the state bucket exists (Phase 0 bootstrap):
   # backend "s3" {
-  #   bucket         = "onetechhub-terraform-state"
+  #   bucket         = "your-terraform-state-bucket"
   #   key            = "llm-platform/prod.tfstate"
   #   region         = "ap-south-1"
   #   dynamodb_table = "terraform-locks"

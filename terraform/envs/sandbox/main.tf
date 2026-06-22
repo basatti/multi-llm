@@ -1,10 +1,17 @@
 # Production deploy — single-GPU shape with prod-grade plumbing and
-# cost-aware scheduling. This is the env you point real apps at.
+# cost-aware scheduling. This is the env you point real applications at.
+#
+# This file represents ONE EXAMPLE operator deployment (Route53 zone
+# `kleem.io`, ACM cert `*.kleem.io`, A-alias `llm.kleem.io`). To deploy
+# against your own domain: fork this env folder, swap the data sources and
+# host_header / hostname references to your own zone + cert, and run
+# `terraform init && terraform apply` from there. The compose stack, app
+# registration flow, and EventBridge schedule are reusable as-is.
 #
 # Topology:
-#   ALB (TLS, *.kleem.io) → EC2 g4dn.xlarge running the full compose stack
-#   (vLLM + LiteLLM gateway + Postgres + Redis + Langfuse + orchestration).
-#   Route53 A-alias: llm.kleem.io → ALB.
+#   ALB (TLS, wildcard cert) → EC2 g4dn.xlarge running the full compose stack
+#   (Ollama + LiteLLM gateway + Postgres + Redis + Langfuse + orchestration).
+#   Route53 A-alias: <gateway-host> → ALB.
 #
 # Cost-aware scheduling (EventBridge Scheduler):
 #   Stop at 22:00 IST weekdays; start at 08:00 IST weekdays; stays stopped all

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://1techhub.internal/llm-repo/models/schema.json",
-  "title": "1TechHub LLM Platform model manifest",
+  "$id": "https://example.invalid/llm-repo/models/schema.json",
+  "title": "LLM platform model manifest",
   "type": "object",
   "additionalProperties": false,
   "required": ["models"],

@@ -1,20 +1,18 @@
-# Canonical gateway routing for deployments that read OLLAMA_BASE_URL from the
-# environment. Three real-named models served from a single Ollama instance
-# (hot-swap, one model resident at a time on a 16 GB GPU).
+# Production / self-hosted-GPU routing for the gateway.
 #
-# Each route has model_info.source: local + manifest_id resolving to
-# models/manifest.yaml (scripts/validate_routes.py enforces). Fallbacks point
-# at peer models so a request mid-swap or during warmup finds something to
-# answer it rather than 5xx.
+# Three real-named models served by Ollama on the same GPU. Apps pass these
+# names in the OpenAI `model` field; virtual keys are scoped to one (or more)
+# at the LiteLLM admin layer. Each route falls back to a peer so requests
+# during a model-swap or warmup don't fail.
 #
-# Applications pass the literal model_name in the OpenAI `model` field.
-# Per-key scope is managed in the LiteLLM admin UI at /ui/ on the gateway.
-
+# NOTE: terraform/envs/sandbox/user-data.sh.tpl currently inlines an identical
+# copy that it writes to the EC2 instance. If you edit one, mirror the other
+# until the AWS bootstrap is refactored to use this file directly.
 model_list:
   - model_name: llama3.1
     litellm_params:
       model: openai/llama3.1:8b
-      api_base: os.environ/OLLAMA_BASE_URL
+      api_base: http://ollama:11434/v1
       api_key: ollama
       timeout: 300
     model_info:
@@ -24,7 +22,7 @@ model_list:
   - model_name: gemma4
     litellm_params:
       model: openai/gemma4:latest
-      api_base: os.environ/OLLAMA_BASE_URL
+      api_base: http://ollama:11434/v1
       api_key: ollama
       timeout: 300
     model_info:
@@ -34,7 +32,7 @@ model_list:
   - model_name: qwen2.5-coder
     litellm_params:
       model: openai/qwen2.5-coder:7b
-      api_base: os.environ/OLLAMA_BASE_URL
+      api_base: http://ollama:11434/v1
       api_key: ollama
       timeout: 300
     model_info:
