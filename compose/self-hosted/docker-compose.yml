@@ -8,7 +8,12 @@
 services:
   ollama:
     image: ollama/ollama:latest
-    runtime: nvidia
+    # GPU access via the modern device-reservation spec. Requires the host to
+    # have nvidia-container-toolkit installed + registered with Docker:
+    #   sudo nvidia-ctk runtime configure --runtime=docker
+    #   sudo systemctl restart docker
+    # (The legacy `runtime: nvidia` shortcut needs an explicit named runtime in
+    # /etc/docker/daemon.json — this block doesn't.)
     deploy:
       resources:
         reservations:
