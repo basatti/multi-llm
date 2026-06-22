@@ -44,7 +44,7 @@ services:
       context: ../../gateway
     command: ["--config", "/etc/litellm/config.cloud.yaml", "--port", "4000"]
     ports:
-      - "4000:4000"
+      - "${LITELLM_HOST_PORT:-4000}:4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       DATABASE_URL: postgresql://platform:${POSTGRES_PASSWORD}@postgres:5432/litellm
@@ -154,7 +154,7 @@ services:
       langfuse-worker:
         condition: service_started
     ports:
-      - "3000:3000"
+      - "${LANGFUSE_HOST_PORT:-3000}:3000"
     environment:
       <<: *langfuse-env
       # If reaching Langfuse over Tailscale by hostname, set
@@ -177,7 +177,7 @@ services:
     build:
       context: ../../orchestration
     ports:
-      - "8000:8000"
+      - "${ORCHESTRATION_HOST_PORT:-8000}:8000"
     environment:
       ORCH_GATEWAY_BASE_URL: http://litellm:4000
       ORCH_GATEWAY_VIRTUAL_KEY: ${LITELLM_MASTER_KEY}

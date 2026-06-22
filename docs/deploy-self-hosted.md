@@ -77,6 +77,21 @@ LANGFUSE_NEXTAUTH_URL=http://gpu-box.tailnet-name.ts.net:3000
 Otherwise leave it unset; the default `http://localhost:3000` works for SSH
 port-forwards.
 
+### Optional: override host ports
+
+The stack binds three ports on the host by default: `4000` (LiteLLM gateway),
+`3000` (Langfuse UI), `8000` (orchestration). If any of those are already in
+use (e.g. you're running another service on `:8000`), uncomment and change
+the relevant lines in `.env`:
+
+```
+LITELLM_HOST_PORT=14000
+LANGFUSE_HOST_PORT=13000
+ORCHESTRATION_HOST_PORT=18000
+```
+
+Container-internal ports stay the same; only the host-side mapping changes.
+
 ---
 
 ## 4. Start the stack
