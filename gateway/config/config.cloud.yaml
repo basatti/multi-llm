@@ -9,48 +9,83 @@
 # copy that it writes to the EC2 instance. If you edit one, mirror the other
 # until the AWS bootstrap is refactored to use this file directly.
 model_list:
-  - model_name: llama3.1
-    litellm_params:
-      model: openai/llama3.1:8b
-      api_base: http://ollama:11434/v1
-      api_key: ollama
-      timeout: 300
-    model_info:
-      source: local
-      manifest_id: llama3.1-8b
-
+  # Shadow prices benchmarked against real hosted OSS / small frontier models.
+  # Not real cost — these models run on the local GPU. The values exist so
+  # spend dashboards in Langfuse + LiteLLM have meaningful numbers.
   - model_name: gemma4
     litellm_params:
       model: openai/gemma4:latest
       api_base: http://ollama:11434/v1
       api_key: ollama
       timeout: 300
+      # $0.075 / 1M input, $0.30 / 1M output (≈ Gemini 1.5 Flash)
+      input_cost_per_token: 0.000000075
+      output_cost_per_token: 0.0000003
     model_info:
       source: local
       manifest_id: gemma4-latest
 
-  - model_name: qwen2.5-coder
+  - model_name: gpt-oss
     litellm_params:
-      model: openai/qwen2.5-coder:7b
+      model: openai/gpt-oss:20b
       api_base: http://ollama:11434/v1
       api_key: ollama
       timeout: 300
+      # $0.30 / 1M input, $1.20 / 1M output (≈ mid-tier hosted OSS, e.g. Llama-3.1-70B)
+      input_cost_per_token: 0.0000003
+      output_cost_per_token: 0.0000012
     model_info:
       source: local
-      manifest_id: qwen2.5-coder-7b
+      manifest_id: gpt-oss-20b
+
+  - model_name: qwen3-coder
+    litellm_params:
+      model: openai/qwen3-coder:30b
+      api_base: http://ollama:11434/v1
+      api_key: ollama
+      timeout: 300
+      # $0.20 / 1M input, $0.80 / 1M output (≈ hosted Qwen3-Coder on Together/Fireworks)
+      input_cost_per_token: 0.0000002
+      output_cost_per_token: 0.0000008
+    model_info:
+      source: local
+      manifest_id: qwen3-coder-30b
+
+  - model_name: bge-m3
+    litellm_params:
+      model: ollama/bge-m3
+      api_base: http://ollama:11434
+      timeout: 120
+      # $0.02 / 1M tokens (≈ hosted bge-m3 / OpenAI text-embedding-3-small)
+      input_cost_per_token: 0.00000002
+      output_cost_per_token: 0
+    model_info:
+      mode: embedding
+      output_vector_size: 1024
+      source: local
+      manifest_id: bge-m3
 
 router_settings:
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
   num_retries: 1
   fallbacks:
-    - llama3.1: ["gemma4"]
-    - gemma4: ["llama3.1"]
-    - qwen2.5-coder: ["llama3.1"]
+    - gemma4: ["gpt-oss"]
+    - gpt-oss: ["gemma4"]
+    - qwen3-coder: ["gpt-oss"]
 
 litellm_settings:
   drop_params: true
   request_timeout: 300
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+  # Short aliases so callers can use model=qwen3 / gpt / gemma without knowing
+  # the underlying tag. Resolved at the router layer, so callers still need the
+  # canonical name in their key's `models` allow-list.
+  model_group_alias:
+    qwen: qwen3-coder
+    gpt: gpt-oss
+    gemma: gemma4
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

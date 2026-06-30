@@ -50,6 +50,21 @@ services:
       DATABASE_URL: postgresql://platform:${POSTGRES_PASSWORD}@postgres:5432/litellm
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      # Public URL behind the Tailscale Serve TLS terminator. Without this,
+      # LiteLLM builds /ui redirects with the local (HTTP) scheme.
+      PROXY_BASE_URL: ${PROXY_BASE_URL:-https://ai-worker2.tail6156a3.ts.net:8443}
+      # uvicorn won't honour X-Forwarded-Proto unless the source IP is trusted.
+      # Tailscale Serve hits us via the Docker bridge gateway (172.x.0.1), not
+      # 127.0.0.1, so the default trust list rejects the header. "*" trusts
+      # any source — safe because nothing outside this compose network can
+      # reach the gateway container directly.
+      FORWARDED_ALLOW_IPS: "*"
+      # Langfuse tracing (success/failure callbacks in config.cloud.yaml)
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+      # Replace the default LiteLLM logo in /ui with the company brand.
+      UI_LOGO_PATH: ${UI_LOGO_PATH:-https://ejadtech.sa/web/image/website/1/header_logo/%D8%A5%D9%8A%D8%AC%D8%A7%D8%AF%20%D8%A7%D9%84%D8%AA%D9%82%D9%86%D9%8A%D8%A9%20%D9%84%D8%AA%D9%82%D9%86%D9%8A%D8%A9%20%D8%A7%D9%84%D9%85%D8%B9%D9%84%D9%88%D9%85%D8%A7%D8%AA}
     depends_on:
       postgres:
         condition: service_healthy
